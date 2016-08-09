@@ -1,0 +1,432 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import ConfigParser
+import logging
+import mpdserver
+import os
+import pychromecast
+import random
+import sys
+import threading
+import time
+
+reload(sys)  # Reload does the trick!
+sys.setdefaultencoding('UTF8')
+
+from gmusicapi import Mobileclient
+
+config = ConfigParser.ConfigParser()
+config.read([os.path.expanduser('~/.gmusiccast.cfg')])
+
+device_id=config.get('gmusic', 'device_id')
+username=config.get('gmusic', 'username')
+password=config.get('gmusic', 'password')
+port=config.getint('server', 'port')
+
+api = ""
+mc = ""
+mpd = ""
+outputs = list() 
+songdata = {}
+playstate = "stop"
+playlist = []
+offset = 0
+duration = 0
+playlistpos = 0
+transitioning = False
+playlistver = 0
+Working = False
+
+def update_playlist(playlist):
+    global playlistver
+    for i in range(len(playlist)):
+        playlist[i].songId=i
+    playlistver = playlistver + 1
+
+def next():
+    global playlistpos
+    global playstate
+    global playlist
+    if playlistpos < len(playlist)-1:
+        playlistpos = playlistpos + 1
+        play(playlist[playlistpos].file)
+        playstate = "play"
+
+def previous():
+    global playlistpos
+    global playstate
+    global playlist
+    if playlistpos > 0:
+        playlistpos = playlistpos - 1
+        play(playlist[playlistpos].file)
+        playstate = "play"
+
+class AddId(mpdserver.Command):
+    formatArg=[('filename', str)]
+    def handle_args(self, filename):
+        self.id = len(playlist) 
+        playlist.append(songdata[filename])
+        update_playlist(playlist)
+    def toMpdMsg(self):
+        return "Id: %s\n" % self.id
+
+class DeleteId(mpdserver.Command):
+    formatArg=[('playlistid', int)]
+    def handle_args(self, playlistid):
+        global playlistpos
+        global playlist
+        playlist.pop(playlistid)
+        if playlistpos > playlistid:
+            playlistpos = playlistpos - 1
+        update_playlist(playlist)
+
+class List(mpdserver.CommandItems):
+    listArg=True
+    def handle_args(self, **kwargs):
+        global songdata
+        self.itemset = set() 
+        params = kwargs['args']
+        precise = True 
+        if len(params) > 2:
+            precise = False
+        for key in songdata.keys():
+            if 'albumartist' in params:
+               artist = params[params.index('albumartist')+1] 
+               if songdata[key].artist.lower() != artist.lower():
+                    continue
+            if params[0] == 'album':
+                if precise == True and songdata[key].artist.lower().replace(' ', '') != params[-1].lower().replace(' ', ''):
+                    continue
+                self.itemset.add(('Album', songdata[key].album))
+    def items(self):
+        return self.itemset
+
+class Add(mpdserver.Command):
+    formatArg=[('filename', str)]
+    def handle_args(self, filename):
+        playlist.append(songdata[filename])
+        update_playlist(playlist)
+
+class Status(mpdserver.Status):
+    def items(self):
+        if playstate == "stop":
+            return self.helper_status_stop()
+        if playstate == "pause":
+            return self.helper_status_pause(playlistSongId=playlistpos)
+        if playstate == "play":
+            return self.helper_status_play(playlistSongId=playlistpos, elapsedTime=offset, durationTime=duration, playlistSongNumber=playlistpos)
+ 
+class Stop(mpdserver.Command):
+    def handle_args(self):
+        global playstate
+        playstate = "stop"
+        mc.pause()
+
+class Pause(mpdserver.Command):
+    formatArg=[('state', mpdserver.OptInt)]
+    def handle_args(self, state=1):
+        global playstate
+        if state==1:
+            playstate = "pause"
+            mc.pause()
+        else:
+            mc.play()
+            playstate = "play"
+
+class Previous(mpdserver.Command):
+    def handle_args(self):
+        previous()
+
+class Next(mpdserver.Command):
+    def handle_args(self):
+        next()
+
+class SetVol(mpdserver.Command):
+    formatArg=[('volume', int)]
+    def handle_args(self, volume):
+        return
+
+class Random(mpdserver.Command):
+    formatArg=[('state', int)]
+    def handle_args(self, state):
+        return
+
+class Repeat(mpdserver.Command):
+    formatArg=[('state', int)]
+    def handle_args(self, state):
+        return
+
+class Idle(mpdserver.Command):
+    listArg=True
+    respond=False
+    def handle_args(self, **kwargs):
+        global idleevent
+        idlethread = threading.Thread(target=self.idle, args=())
+        idlethread.start()
+        return
+    def idle(self):
+        global Working
+        while True:
+            time.sleep(1)
+            if Working == False and len(playlist) > 0:
+                self.request.send("changed: playlist\nchanged: player\nOK\n")
+                return
+
+class Seek(mpdserver.Command):
+    formatArg=[('songpos', int), ('time', int)]
+    def handle_args(self, songpos, time):
+        mc.seek(time)
+
+class SeekId(mpdserver.Command):
+    formatArg=[('songid', int), ('time', int)]
+    def handle_args(self, songid, time):
+        mc.seek(time)
+
+class Play(mpdserver.Command):
+    def handle_args(self):
+        global playstate
+        mc.play()
+        playstate = "play"
+
+class PlayId(mpdserver.Command):
+    formatArg=[('playlistid', int)]
+    def handle_args(self, playlistid):
+        global playlist
+        global playstate
+        global playlistpos
+        if playlistid == -1:
+            play(-1)
+        else:
+            play(playlist[playlistid].file)
+            playlistpos = playlistid
+        playstate = "play"
+
+    
+class PlayListFind(mpdserver.CommandSongs):
+    formatArg=[('type', str),('filename', str)]
+    def handle_args(self, type, filename):
+        return
+
+class EnableOutput(mpdserver.Command):
+    formatArg=[('output', int)]
+    def handle_args(self, output):
+        global mc
+        mc.stop()
+        for i in range(len(outputs)):
+            outputs[i]['enabled'] = 0
+        outputs[output]['enabled'] = 1
+        chromecast = pychromecast.get_chromecast(friendly_name=outputs[output]['name'])
+        chromecast.wait()
+        mc = chromecast.media_controller
+        return
+
+class Outputs(mpdserver.CommandItems):
+    def items(self):
+        data = [] 
+        for i in range(len(outputs)):
+            data.append(('outputid',i))
+            data.append(('outputname', outputs[i]['name']))
+            data.append(('outputenabled',outputs[i]['enabled']))
+        return data
+
+class ListPlaylists(mpdserver.CommandItems):
+    def items(self):
+        return []
+
+class UrlHandlers(mpdserver.CommandItems):
+    def items(self):
+        return []
+
+class TagTypes(mpdserver.CommandItems):
+    def items(self):
+        return []
+
+class Commands(mpdserver.CommandItems):
+    def items(self):
+        return []
+
+def list_contains(songlist, nid):
+    for song in songlist:
+        if song.file == nid:
+            return True
+    return False
+
+class Find(mpdserver.CommandSongs):
+    varArg=True
+    def handle_args(self, **kwargs):
+        return
+    def songs(self):
+        self.songlist = []
+        for key in songdata:
+            track = songdata[key]
+            if 'album' in self.args:
+                if track.album.lower() != self.args['album'][0].lower():
+                    continue
+            if 'albumartist' in self.args:
+                if track.artist.lower() != self.args['albumartist'][0].lower():
+                    continue
+            if 'track' in self.args:
+                if track.track != int(self.args['track'][0]):
+                    continue
+            self.songlist.append(track)
+        return self.songlist 
+
+class Search(mpdserver.CommandSongs):
+    varArg=True
+    def handle_args(self, **kwargs):
+        self.query = ""
+        for key in sorted(kwargs.iterkeys()):
+            for item in kwargs[key]:
+                self.query = "%s %s" % (self.query, item)
+    def songs(self):
+        global Working
+        Working = True
+        songlist = []
+        artists = []
+        albums = []
+        flatquery = self.query.lower().replace(' ', '')
+        results = api.search(self.query, max_results=100)
+        for song in results['song_hits']:
+            try:
+                track = song['track']
+                for key in track:
+                    if type(track[key]) is unicode:
+                        track[key] = track[key].replace('"', u"″")
+                if list_contains(songlist, track['nid']):
+                    continue
+                mpdsong = mpdserver.MpdPlaylistSong(track['nid'], -2, title=track['title'], album=track['album'], artist=track['artist'], time=int(track['durationMillis'])/1000, track=track['trackNumber'],playlistPosition=-1)
+                songdata[track['nid']] = mpdsong
+                songlist.append(mpdsong)
+                response = mpdsong.toMpdMsg()
+                self.request.send(mpdsong.toMpdMsg())
+            except KeyError:
+                print ("Keyerror:")
+                print(song)
+                pass
+        for hit in results['album_hits']:
+            album = hit['album']
+            if album['name'].lower().replace(' ', '') == flatquery:
+                albumdata = api.get_album_info(album['albumId'], include_tracks=True)
+                for track in albumdata['tracks']:
+                    if list_contains(songlist, track['nid']):
+                        continue
+                    for key in track:
+                        if type(track[key]) is unicode:
+                            track[key] = track[key].replace('"', u"″")
+                    mpdsong = mpdserver.MpdPlaylistSong(track['nid'], -2, title=track['title'], album=track['album'], artist=track['artist'], time=int(track['durationMillis'])/1000, track=track['trackNumber'],playlistPosition=-1)
+                    songdata[track['nid']] = mpdsong
+                    songlist.append(mpdsong)
+                    self.request.send(mpdsong.toMpdMsg())
+        for hit in results['artist_hits']:
+            artist = hit['artist']
+            if artist['name'].lower().replace(' ', '') == flatquery:
+                artistdata = api.get_artist_info(artist['artistId'], include_albums=True)
+                if 'albums' not in artistdata:
+                    continue
+                for album in artistdata['albums']:
+                    albumdata = api.get_album_info(album['albumId'], include_tracks=True)
+                    for track in albumdata['tracks']:
+                        if list_contains(songlist, track['nid']):
+                            continue
+                        for key in track:
+                            if type(track[key]) is unicode:
+                                track[key] = track[key].replace('"', u"″")
+                        mpdsong = mpdserver.MpdPlaylistSong(track['nid'], -2, title=track['title'], album=track['album'], artist=track['artist'], time=int(track['durationMillis'])/1000, track=track['trackNumber'],playlistPosition=-1)
+                        songdata[track['nid']] = mpdsong
+                        songlist.append(mpdsong)
+                        self.request.send(mpdsong.toMpdMsg())
+        Working=False
+        return [] 
+
+class Playlist(mpdserver.MpdPlaylist):
+    def handlePlaylist(self):
+        return playlist
+    def songIdToPosition(self,songid):
+        for i in range(len(playlist)):
+            if playlist[i].songId == songid:
+                return i
+        return -1
+    def version(self):
+        global playlistver
+        return playlistver
+
+def setup():
+    global api
+    global mpd
+    global outputs
+    global mc
+    api = Mobileclient()
+    if api.login(username, password, device_id) != True:
+        print("Unable to login")
+        os.exit(1)
+    chromecasts = pychromecast.get_chromecasts_as_dict()
+    enabled = 1
+    for key in chromecasts.keys():
+        outputs.append({'name':key, 'enabled': enabled})
+        enabled = 0
+    chromecast = pychromecast.get_chromecast(friendly_name=outputs[0]['name'])
+    chromecast.wait()
+    mc = chromecast.media_controller
+    if mc.status.player_state != "UNKNOWN":
+        mc.update_status()
+    glog = logging.getLogger("gmusicapi.Mobileclient1")
+    glog.setLevel(logging.CRITICAL)
+    mpd=mpdserver.MpdServerDaemon(port)
+    mpd.requestHandler.RegisterCommand(Outputs)
+    mpd.requestHandler.RegisterCommand(EnableOutput)
+    mpd.requestHandler.RegisterCommand(UrlHandlers)
+    mpd.requestHandler.RegisterCommand(TagTypes)
+    mpd.requestHandler.RegisterCommand(Commands)
+    mpd.requestHandler.RegisterCommand(Search)
+    mpd.requestHandler.RegisterCommand(List)
+    mpd.requestHandler.RegisterCommand(Find)
+    mpd.requestHandler.RegisterCommand(Add)
+    mpd.requestHandler.RegisterCommand(AddId)
+    mpd.requestHandler.RegisterCommand(DeleteId)
+    mpd.requestHandler.RegisterCommand(Pause)
+    mpd.requestHandler.RegisterCommand(Next)
+    mpd.requestHandler.RegisterCommand(Previous)
+    mpd.requestHandler.RegisterCommand(Idle)
+    mpd.requestHandler.RegisterCommand(Stop)
+    mpd.requestHandler.RegisterCommand(Status)
+    mpd.requestHandler.RegisterCommand(Play)
+    mpd.requestHandler.RegisterCommand(Seek)
+    mpd.requestHandler.RegisterCommand(SeekId)
+    mpd.requestHandler.RegisterCommand(PlayId)
+    mpd.requestHandler.RegisterCommand(PlayListFind)
+    mpd.requestHandler.RegisterCommand(ListPlaylists)
+    mpd.requestHandler.RegisterCommand(Random)
+    mpd.requestHandler.RegisterCommand(Repeat)
+    mpd.requestHandler.RegisterCommand(SetVol)
+    mpd.requestHandler.Playlist=Playlist
+
+def play(songid):
+    global transitioning 
+    transitioning = True
+    if songid == -1:
+        mc.play()
+    else:
+        global offset
+        global duration
+        stream = api.get_stream_url(songid, device_id=device_id, quality='hi')
+        offset = 0
+        duration = songdata[songid].time
+        mc.play_media(stream, 'audio/mp3')
+        mc.play()
+
+setup()
+try:
+    while mpd.wait(1):
+        if mc.status.player_state != "UNKNOWN":
+            mc.update_status()
+        if playstate == "play" and mc.status.player_state == "IDLE" and transitioning == False:
+            next()
+        if mc.status.player_state == "PLAYING" or mc.status.player_state == "BUFFERING":
+            transitioning = False
+        offset = int(mc.status.current_time)
+        pass
+except KeyboardInterrupt:
+    print("Stopping mpd server")
+    mpd.quit()
+
