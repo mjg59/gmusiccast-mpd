@@ -9,6 +9,7 @@ Requirements
 * [My fork of python-mpd-server](https://github.com/mjg59/python-mpd-server)
 * [pychromecast](https://github.com/balloob/pychromecast)
 * [gmusicapi](https://github.com/simon-weber/gmusicapi)
+* [Unidecode](https://pypi.python.org/pypi/Unidecode)
 
 Use
 ---

@@ -15,6 +15,7 @@ reload(sys)  # Reload does the trick!
 sys.setdefaultencoding('UTF8')
 
 from gmusicapi import Mobileclient
+from unidecode import unidecode
 
 config = ConfigParser.ConfigParser()
 config.read([os.path.expanduser('~/.gmusiccast.cfg')])
@@ -29,6 +30,7 @@ mc = ""
 mpd = ""
 outputs = list() 
 songdata = {}
+songdict = {}
 playstate = "stop"
 playlist = []
 offset = 0
@@ -92,11 +94,15 @@ class List(mpdserver.CommandItems):
             precise = False
         for key in songdata.keys():
             if 'albumartist' in params:
-               artist = params[params.index('albumartist')+1] 
-               if songdata[key].artist.lower() != artist.lower():
+               artist = unidecode(unicode(params[params.index('albumartist')+1])).lower()
+               if unidecode(songdata[key].artist).lower() != artist:
+                    continue
+            if 'artist' in params:
+               artist = unidecode(unicode(params[params.index('artist')+1])).lower()
+               if unidecode(songdata[key].artist).lower() != artist:
                     continue
             if params[0] == 'album':
-                if precise == True and songdata[key].artist.lower().replace(' ', '') != params[-1].lower().replace(' ', ''):
+                if precise == True and unidecode(songdata[key].artist).lower().replace(' ', '') != unidecode(unicode(params[-1])).lower().replace(' ', ''):
                     continue
                 self.itemset.add(('Album', songdata[key].album))
     def items(self):
@@ -252,25 +258,52 @@ def list_contains(songlist, nid):
             return True
     return False
 
+def song_add(nid, song, artist=None):
+    global songdata
+    global songdict
+    songdata[nid] = song
+    if artist == None:
+        artist = unidecode(song.artist).lower()
+    album = unidecode(song.album).lower()
+    if artist not in songdict:
+        songdict[artist] = {}
+    if album not in songdict[artist]:
+        songdict[artist][album] = []
+    songdict[artist][album].append(song)
+
 class Find(mpdserver.CommandSongs):
     varArg=True
     def handle_args(self, **kwargs):
         return
     def songs(self):
         self.songlist = []
-        for key in songdata:
-            track = songdata[key]
-            if 'album' in self.args:
-                if track.album.lower() != self.args['album'][0].lower():
-                    continue
-            if 'albumartist' in self.args:
-                if track.artist.lower() != self.args['albumartist'][0].lower():
-                    continue
-            if 'track' in self.args:
-                if track.track != int(self.args['track'][0]):
-                    continue
-            self.songlist.append(track)
-        return self.songlist 
+        artistdata = None
+        if 'artist' in self.args:
+            artist = unidecode(unicode(self.args['artist'][0])).lower()
+            if artist not in songdict:
+                return []
+            artistdata = songdict[artist]
+        if 'albumartist' in self.args:
+            artist = unidecode(unicode(self.args['albumartist'][0])).lower()
+            if artist not in songdict:
+                return []
+            artistdata = songdict[artist]
+        if artistdata == None:
+            return []
+        if 'album' in self.args:
+            album = unidecode(unicode(self.args['album'][0])).lower()
+            if album in artistdata:
+                if 'track' in self.args:
+                    for track in artistdata[album]:
+                        if track.track == int(self.args['track'][0]):
+                           return [track]
+                    return []
+                return artistdata[album]
+            return []
+        tracks = []
+        for album in artistdata.keys():
+            tracks.extend(artistdata[album])
+        return tracks
 
 class Search(mpdserver.CommandSongs):
     varArg=True
@@ -281,11 +314,12 @@ class Search(mpdserver.CommandSongs):
                 self.query = "%s %s" % (self.query, item)
     def songs(self):
         global Working
+        global songdata
         Working = True
         songlist = []
         artists = []
         albums = []
-        flatquery = self.query.lower().replace(' ', '')
+        flatquery = unidecode(unicode(self.query)).lower().replace(' ', '')
         results = api.search(self.query, max_results=100)
         for song in results['song_hits']:
             try:
@@ -296,7 +330,7 @@ class Search(mpdserver.CommandSongs):
                 if list_contains(songlist, track['nid']):
                     continue
                 mpdsong = mpdserver.MpdPlaylistSong(track['nid'], -2, title=track['title'], album=track['album'], artist=track['artist'], time=int(track['durationMillis'])/1000, track=track['trackNumber'],playlistPosition=-1)
-                songdata[track['nid']] = mpdsong
+                song_add(track['nid'], mpdsong)
                 songlist.append(mpdsong)
                 response = mpdsong.toMpdMsg()
                 self.request.send(mpdsong.toMpdMsg())
@@ -306,7 +340,7 @@ class Search(mpdserver.CommandSongs):
                 pass
         for hit in results['album_hits']:
             album = hit['album']
-            if album['name'].lower().replace(' ', '') == flatquery:
+            if unidecode(album['name']).lower().replace(' ', '') == flatquery:
                 albumdata = api.get_album_info(album['albumId'], include_tracks=True)
                 for track in albumdata['tracks']:
                     if list_contains(songlist, track['nid']):
@@ -315,25 +349,28 @@ class Search(mpdserver.CommandSongs):
                         if type(track[key]) is unicode:
                             track[key] = track[key].replace('"', u"″")
                     mpdsong = mpdserver.MpdPlaylistSong(track['nid'], -2, title=track['title'], album=track['album'], artist=track['artist'], time=int(track['durationMillis'])/1000, track=track['trackNumber'],playlistPosition=-1)
-                    songdata[track['nid']] = mpdsong
+                    song_add(track['nid'], mpdsong)
                     songlist.append(mpdsong)
                     self.request.send(mpdsong.toMpdMsg())
         for hit in results['artist_hits']:
             artist = hit['artist']
-            if artist['name'].lower().replace(' ', '') == flatquery:
+            artistname = unidecode(artist['name']).lower()
+            if artistname.replace(' ', '') == flatquery:
                 artistdata = api.get_artist_info(artist['artistId'], include_albums=True)
                 if 'albums' not in artistdata:
                     continue
                 for album in artistdata['albums']:
                     albumdata = api.get_album_info(album['albumId'], include_tracks=True)
+                    if 'tracks' not in albumdata:
+                        continue
                     for track in albumdata['tracks']:
                         if list_contains(songlist, track['nid']):
                             continue
                         for key in track:
-                            if type(track[key]) is unicode:
+                           if type(track[key]) is unicode:
                                 track[key] = track[key].replace('"', u"″")
                         mpdsong = mpdserver.MpdPlaylistSong(track['nid'], -2, title=track['title'], album=track['album'], artist=track['artist'], time=int(track['durationMillis'])/1000, track=track['trackNumber'],playlistPosition=-1)
-                        songdata[track['nid']] = mpdsong
+                        song_add(track['nid'], mpdsong, artist=artistname)
                         songlist.append(mpdsong)
                         self.request.send(mpdsong.toMpdMsg())
         Working=False
