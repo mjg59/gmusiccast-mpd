@@ -117,9 +117,9 @@ class Add(mpdserver.Command):
 class Status(mpdserver.Status):
     def items(self):
         if playstate == "stop":
-            return self.helper_status_stop()
+            return self.helper_status_stop(playlistSongId=playlistpos, elapsedTime=offset, durationTime=duration, playlistSongNumber=playlistpos)
         if playstate == "pause":
-            return self.helper_status_pause(playlistSongId=playlistpos)
+            return self.helper_status_pause(playlistSongId=playlistpos, elapsedTime=offset, durationTime=duration, playlistSongNumber=playlistpos)
         if playstate == "play":
             return self.helper_status_play(playlistSongId=playlistpos, elapsedTime=offset, durationTime=duration, playlistSongNumber=playlistpos)
  
