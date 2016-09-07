@@ -79,16 +79,6 @@ class AddId(mpdserver.Command):
     def toMpdMsg(self):
         return "Id: %s\n" % self.id
 
-class DeleteId(mpdserver.Command):
-    formatArg=[('playlistid', int)]
-    def handle_args(self, playlistid):
-        global playlistpos
-        global playlist
-        playlist.pop(playlistid)
-        if playlistpos > playlistid:
-            playlistpos = playlistpos - 1
-        update_playlist(playlist)
-
 class List(mpdserver.CommandItems):
     listArg=True
     def handle_args(self, **kwargs):
@@ -393,11 +383,19 @@ class Search(mpdserver.CommandSongs):
 class Playlist(mpdserver.MpdPlaylist):
     def handlePlaylist(self):
         return playlist
+    def delete(self,position):
+        global playlistpos
+        item = playlist.pop(position)
+        if playlistpos > position:
+            playlistpos = playlistpos - 1
+        update_playlist(playlist)
     def songIdToPosition(self,songid):
         for i in range(len(playlist)):
             if playlist[i].songId == songid:
                 return i
         return -1
+    def generateMpdPlaylistDiff(self, version):
+        return playlist
     def version(self):
         global playlistver
         return playlistver
@@ -434,7 +432,6 @@ def setup():
     mpd.requestHandler.RegisterCommand(Find)
     mpd.requestHandler.RegisterCommand(Add)
     mpd.requestHandler.RegisterCommand(AddId)
-    mpd.requestHandler.RegisterCommand(DeleteId)
     mpd.requestHandler.RegisterCommand(Pause)
     mpd.requestHandler.RegisterCommand(Next)
     mpd.requestHandler.RegisterCommand(Previous)
