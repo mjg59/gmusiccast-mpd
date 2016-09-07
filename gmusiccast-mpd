@@ -7,6 +7,7 @@ import mpdserver
 import os
 import pychromecast
 import random
+import sdnotify
 import sys
 import threading
 import time
@@ -437,6 +438,8 @@ def setup():
     mpd.requestHandler.RegisterCommand(Repeat)
     mpd.requestHandler.RegisterCommand(SetVol)
     mpd.requestHandler.Playlist=Playlist
+    n = sdnotify.SystemdNotifier()
+    n.notify("READY=1")
 
 def play(songid):
     global transitioning 

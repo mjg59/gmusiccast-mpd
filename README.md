@@ -10,6 +10,7 @@ Requirements
 * [pychromecast](https://github.com/balloob/pychromecast)
 * [gmusicapi](https://github.com/simon-weber/gmusicapi)
 * [Unidecode](https://pypi.python.org/pypi/Unidecode)
+* [sdnotify](https://github.com/bb4242/sdnotify)
 
 Use
 ---
