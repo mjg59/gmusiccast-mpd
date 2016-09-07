@@ -37,7 +37,7 @@ playstate = "stop"
 playlist = []
 offset = 0
 duration = 0
-playlistpos = 0
+playlistpos = -1
 transitioning = False
 playlistver = 0
 Working = False
@@ -183,9 +183,14 @@ class SeekId(mpdserver.Command):
         mc.seek(time)
 
 class Play(mpdserver.Command):
-    def handle_args(self):
+    formatArg=[('id', mpdserver.OptInt)]
+    def handle_args(self, id=-1):
         global playstate
-        mc.play()
+        if id == -1:
+            mc.play()
+        else:
+            play(playlist[id].file)
+            playlistpos = id
         playstate = "play"
 
 class PlayId(mpdserver.Command):
