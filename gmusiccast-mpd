@@ -29,6 +29,7 @@ port=config.getint('server', 'port')
 api = ""
 mc = ""
 mpd = ""
+ref_songid = 0
 outputs = list() 
 songdata = {}
 songdict = {}
@@ -316,6 +317,7 @@ class Search(mpdserver.CommandSongs):
     def songs(self):
         global Working
         global songdata
+        global ref_songid
         Working = True
         songlist = []
         artists = []
@@ -330,7 +332,8 @@ class Search(mpdserver.CommandSongs):
                         track[key] = track[key].replace('"', u"″")
                 if list_contains(songlist, track['nid']):
                     continue
-                mpdsong = mpdserver.MpdPlaylistSong(track['nid'], -2, title=track['title'], album=track['album'], artist=track['artist'], time=int(track['durationMillis'])/1000, track=track['trackNumber'],playlistPosition=-1)
+                mpdsong = mpdserver.MpdPlaylistSong(track['nid'], ref_songid, title=track['title'], album=track['album'], artist=track['artist'], time=int(track['durationMillis'])/1000, track=track['trackNumber'],playlistPosition=-1)
+                ref_songid = ref_songid+1
                 song_add(track['nid'], mpdsong)
                 songlist.append(mpdsong)
                 response = mpdsong.toMpdMsg()
@@ -349,7 +352,8 @@ class Search(mpdserver.CommandSongs):
                     for key in track:
                         if type(track[key]) is unicode:
                             track[key] = track[key].replace('"', u"″")
-                    mpdsong = mpdserver.MpdPlaylistSong(track['nid'], -2, title=track['title'], album=track['album'], artist=track['artist'], time=int(track['durationMillis'])/1000, track=track['trackNumber'],playlistPosition=-1)
+                    mpdsong = mpdserver.MpdPlaylistSong(track['nid'], ref_songid, title=track['title'], album=track['album'], artist=track['artist'], time=int(track['durationMillis'])/1000, track=track['trackNumber'],playlistPosition=-1)
+                    ref_songid = ref_songid+1
                     song_add(track['nid'], mpdsong)
                     songlist.append(mpdsong)
                     self.request.send(mpdsong.toMpdMsg())
@@ -370,7 +374,8 @@ class Search(mpdserver.CommandSongs):
                         for key in track:
                            if type(track[key]) is unicode:
                                 track[key] = track[key].replace('"', u"″")
-                        mpdsong = mpdserver.MpdPlaylistSong(track['nid'], -2, title=track['title'], album=track['album'], artist=track['artist'], time=int(track['durationMillis'])/1000, track=track['trackNumber'],playlistPosition=-1)
+                        mpdsong = mpdserver.MpdPlaylistSong(track['nid'], ref_songid, title=track['title'], album=track['album'], artist=track['artist'], time=int(track['durationMillis'])/1000, track=track['trackNumber'],playlistPosition=-1)
+                        ref_songid = ref_songid+1
                         song_add(track['nid'], mpdsong, artist=artistname)
                         songlist.append(mpdsong)
                         self.request.send(mpdsong.toMpdMsg())
