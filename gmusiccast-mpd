@@ -41,12 +41,16 @@ playlistpos = 0
 transitioning = False
 playlistver = 0
 Working = False
+idlecondition = threading.Condition()
 
 def update_playlist(playlist):
     global playlistver
-    for i in range(len(playlist)):
-        playlist[i].songId=i
     playlistver = playlistver + 1
+    playlistposition = 0
+    for song in playlist:
+        song.playlistPosition = playlistposition
+        playlistposition = playlistposition + 1
+    notify_idle()
 
 def next():
     global playlistpos
@@ -174,12 +178,9 @@ class Idle(mpdserver.Command):
         idlethread.start()
         return
     def idle(self):
-        global Working
-        while True:
-            time.sleep(1)
-            if Working == False and len(playlist) > 0:
-                self.request.send("changed: playlist\nchanged: player\nOK\n")
-                return
+        with idlecondition:
+            idlecondition.wait(1.0)
+            update_idle(self.request)
 
 class Seek(mpdserver.Command):
     formatArg=[('songpos', int), ('time', int)]
@@ -253,6 +254,13 @@ class TagTypes(mpdserver.CommandItems):
 class Commands(mpdserver.CommandItems):
     def items(self):
         return []
+
+def update_idle(request):
+    request.send("changed: playlist\nchanged: player\nOK\n")
+
+def notify_idle():
+    with idlecondition:
+        idlecondition.notify()
 
 def list_contains(songlist, nid):
     for song in songlist:
