@@ -42,6 +42,8 @@ transitioning = False
 playlistver = 0
 Working = False
 idlecondition = threading.Condition()
+repeat = 0
+rand = 0
 
 def update_playlist(playlist):
     global playlistver
@@ -56,8 +58,17 @@ def next():
     global playlistpos
     global playstate
     global playlist
-    if playlistpos < len(playlist)-1:
+    global rand
+    if rand == True:
+        playlistpos = random.randrange(len(playlist))
+        play(playlist[playlistpos].file)
+        playstate = "play"
+    elif playlistpos < len(playlist)-1:
         playlistpos = playlistpos + 1
+        play(playlist[playlistpos].file)
+        playstate = "play"
+    elif repeat:
+        playlistpos = 0
         play(playlist[playlistpos].file)
         playstate = "play"
 
@@ -107,17 +118,25 @@ class List(mpdserver.CommandItems):
 class Add(mpdserver.Command):
     formatArg=[('filename', str)]
     def handle_args(self, filename):
-        playlist.append(songdata[filename])
+        global ref_songid
+        try:
+            playlist.append(songdata[filename])
+        except KeyError:
+            track = api.get_track_info(filename)
+            mpdsong = mpdserver.MpdPlaylistSong(track['nid'], ref_songid, title=track['title'], album=track['album'], artist=track['artist'], time=int(track['durationMillis'])/1000, track=track['trackNumber'],playlistPosition=-1)
+            ref_songid = ref_songid+1
+            song_add(track['nid'], mpdsong)
+            playlist.append(songdata[filename])
         update_playlist(playlist)
 
 class Status(mpdserver.Status):
     def items(self):
         if playstate == "stop":
-            return self.helper_status_stop()
+            return self.helper_status_stop(random=int(rand), repeat=int(repeat))
         if playstate == "pause":
-            return self.helper_status_pause(playlistSongId=playlistpos, elapsedTime=offset, durationTime=duration, playlistSongNumber=playlistpos)
+            return self.helper_status_pause(random=int(rand), repeat=int(repeat), playlistSongId=playlistpos, elapsedTime=offset, durationTime=duration, playlistSongNumber=playlistpos)
         if playstate == "play":
-            return self.helper_status_play(playlistSongId=playlistpos, elapsedTime=offset, durationTime=duration, playlistSongNumber=playlistpos)
+            return self.helper_status_play(random=int(rand), repeat=int(repeat), playlistSongId=playlistpos, elapsedTime=offset, durationTime=duration, playlistSongNumber=playlistpos)
  
 class Stop(mpdserver.Command):
     def handle_args(self):
@@ -144,6 +163,10 @@ class Next(mpdserver.Command):
     def handle_args(self):
         next()
 
+class Replay_Gain_Status(mpdserver.Command):
+    def handle_args(self):
+        return
+
 class SetVol(mpdserver.Command):
     formatArg=[('volume', int)]
     def handle_args(self, volume):
@@ -152,12 +175,20 @@ class SetVol(mpdserver.Command):
 class Random(mpdserver.Command):
     formatArg=[('state', int)]
     def handle_args(self, state):
-        return
+        global rand
+        rand = state
 
-class Repeat(mpdserver.Command):
+class Shuffle(mpdserver.Command):
     formatArg=[('state', int)]
     def handle_args(self, state):
-        return
+        global rand
+        rand = bool(state)
+
+class Move(mpdserver.Command):
+    formatArg=[('frompos', int), ('topos', int)]
+    def handle_args(self, frompos, topos):
+        global playlist
+        playlist.insert(topos, playlist.pop(frompos))
 
 class Idle(mpdserver.Command):
     listArg=True
@@ -182,11 +213,20 @@ class SeekId(mpdserver.Command):
     def handle_args(self, songid, time):
         mc.seek(time)
 
+class Repeat(mpdserver.Command):
+    formatArg=[('state', int)]
+    def handle_args(self, state):
+        global repeat
+        repeat = bool(state)
+
 class Play(mpdserver.Command):
     formatArg=[('id', mpdserver.OptInt)]
     def handle_args(self, id=-1):
         global playstate
+        global playlistpos
         if id == -1:
+            if playlistpos == -1:
+              playlistpos = 0
             mc.play()
         else:
             play(playlist[id].file)
@@ -235,6 +275,16 @@ class Outputs(mpdserver.CommandItems):
         return data
 
 class ListPlaylists(mpdserver.CommandItems):
+    def items(self):
+        return []
+
+class LsInfo(mpdserver.CommandItems):
+    formatArg=[('directory',mpdserver.OptStr)]
+    def items(self):
+        return []
+
+class ListAllInfo(mpdserver.CommandItems):
+    formatArg=[('directory',mpdserver.OptStr)]
     def items(self):
         return []
 
@@ -434,10 +484,13 @@ def setup():
     mpd.requestHandler.RegisterCommand(Commands)
     mpd.requestHandler.RegisterCommand(Search)
     mpd.requestHandler.RegisterCommand(List)
+    mpd.requestHandler.RegisterCommand(ListAllInfo)
+    mpd.requestHandler.RegisterCommand(LsInfo)
     mpd.requestHandler.RegisterCommand(Find)
     mpd.requestHandler.RegisterCommand(Add)
     mpd.requestHandler.RegisterCommand(AddId)
     mpd.requestHandler.RegisterCommand(Pause)
+    mpd.requestHandler.RegisterCommand(Move)
     mpd.requestHandler.RegisterCommand(Next)
     mpd.requestHandler.RegisterCommand(Previous)
     mpd.requestHandler.RegisterCommand(Idle)
@@ -452,6 +505,7 @@ def setup():
     mpd.requestHandler.RegisterCommand(Random)
     mpd.requestHandler.RegisterCommand(Repeat)
     mpd.requestHandler.RegisterCommand(SetVol)
+    mpd.requestHandler.RegisterCommand(Replay_Gain_Status)
     mpd.requestHandler.Playlist=Playlist
     n = sdnotify.SystemdNotifier()
     n.notify("READY=1")
